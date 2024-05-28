@@ -11,7 +11,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
@@ -20,11 +20,10 @@ jobs:
       run: curl -L https://github.com/zaoqi/github-actions-archlinux/raw/master/install.sh | sh
 
     - name: Install dependencies
-      run: sudo pacman --noconfirm -Syu base-devel libgit2 curl json-c
+      run: sudo pacman --noconfirm -Syu base-devel cmake libgit2 curl json-c
 
     - name: Configure CMake
       run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 
     - name: Build
-      run: cmake --build ${{github.workspace}}/build --config ${{env.BUILD_TYPE}}
-
+      run: cd ${{github.workspace}}/build && make
