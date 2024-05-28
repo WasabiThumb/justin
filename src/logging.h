@@ -9,29 +9,49 @@
 
 // Errors
 typedef int64_t justin_err;
+#define JUSTIN_ERR_OK 0L
 #define JUSTIN_ERR_NOMEM 1L
 #define JUSTIN_ERR_LOCKFILE_FULL 2L
 #define JUSTIN_ERR_LINK 3L
-#define JUSTIN_ERR_FLAG_SYSTEM (0b01L << (sizeof(int) * 8))
+#define JUSTIN_ERR_ARGS 4L
+#define JUSTIN_ERR_ASSERTION 5L
+#define JUSTIN_ERR_GIT 6L
+#define JUSTIN_ERR_FLAG_SYSTEM (0b1L << (sizeof(int) * 8))
 #define JUSTIN_ERR_SYSTEM (errno | JUSTIN_ERR_FLAG_SYSTEM)
+#define JUSTIN_ERR_FLAG_CURL (0b10L << (sizeof(int) * 8))
+#define JUSTIN_ERR_CURL(e) (((int64_t) (e)) | JUSTIN_ERR_FLAG_CURL)
+#define JUSTIN_ERR_FLAG_SUBPROC (0b100L << (sizeof(int) * 8))
+#define JUSTIN_ERR_SUBPROC(e) (((int64_t) (e)) | JUSTIN_ERR_FLAG_SUBPROC)
+#define JUSTIN_ERR_FLAG_ALPM (0b1000L << (sizeof(int) * 8))
+#define JUSTIN_ERR_ALPM_X(handle) (((int64_t) alpm_errno(handle)) | JUSTIN_ERR_FLAG_ALPM)
+#define JUSTIN_ERR_ALPM JUSTIN_ERR_ALPM_X(handle)
 
 static inline bool justin_err_is_system(justin_err err) {
     return (err & JUSTIN_ERR_FLAG_SYSTEM) != 0;
 }
 
+static inline bool justin_err_is_curl(justin_err err) {
+    return (err & JUSTIN_ERR_FLAG_CURL) != 0;
+}
+
+static inline bool justin_err_is_subproc(justin_err err) {
+    return (err & JUSTIN_ERR_FLAG_SUBPROC) != 0;
+}
+
+static inline bool justin_err_is_alpm(justin_err err) {
+    return (err & JUSTIN_ERR_FLAG_ALPM) != 0;
+}
+
 const char* justin_err_str(justin_err err);
 
 // Logging
-#ifndef __FILENAME__
-#define __FILENAME__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
-#endif
 
 #ifndef NDEBUG
 void justin_log_debug(const char* msg);
 void justin_log_debug_indent(const char* msg, uint8_t indent);
 #else
 #define justin_log_debug(msg)
-#define justin_log_debug_indent(msg)
+#define justin_log_debug_indent(msg, indent)
 #endif
 
 void justin_log_info(const char* msg);
@@ -44,8 +64,8 @@ void justin_log_warn(const char* msg);
 
 void justin_log_err_msg_at(justin_err err, const char *restrict msg, const char *restrict file, int line);
 #define justin_log_err_at(err, file, line) justin_log_err_msg_at(err, NULL, file, line)
-#define justin_log_err(err) justin_log_err_at(err, __FILENAME__, __LINE__)
-#define justin_log_err_msg(err, msg) justin_log_err_msg_at(err, msg, __FILENAME__, __LINE__)
+#define justin_log_err(err) justin_log_err_at(err, __FILE__, __LINE__)
+#define justin_log_err_msg(err, msg) justin_log_err_msg_at(err, msg, __FILE__, __LINE__)
 
 static inline void* justin_malloc_msg(size_t size, const char* msg) {
     void *ret = malloc(size);

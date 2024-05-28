@@ -2,32 +2,65 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <curl/curl.h>
+#include <git2.h>
+#include <alpm.h>
 #include "ansi.h"
 #include "version.h"
 #include "logging.h"
 
 // Errors
-static char SYSTEM_ERR_BUF[256] = "System error: ";
 static char UNKNOWN_ERR_BUF[35] = "Unknown error (0x0000000000000000)";
+static char EXT_ERR_BUF[256];
+static const char *SYSTEM_ERR = "System error: ";
+static const char *CURL_ERR = "cURL error: ";
+static const char *GIT_ERR = "Git error: ";
+static const char *ALPM_ERR = "ALPM error: ";
+static const char *SUBPROC_ERR = "Child process exited with status code ";
 
 static const char* MSG_NOMEM = "Out of memory";
 static const char* MSG_LOCKFILE_FULL = "Lockfile is at capacity";
 static const char* MSG_LINK = "Linkage error";
+static const char* MSG_ARGS = "Bad command-line arguments";
+static const char* MSG_ASSERTION = "Assertion error";
+
+const char* err_str_ext(const char *restrict base, const char *restrict desc, size_t desc_len) {
+    memcpy(EXT_ERR_BUF, desc, desc_len);
+    size_t off = desc_len;
+
+    size_t max_len = 255 - off;
+    size_t base_len = strlen(base);
+    if (base_len >= max_len) {
+        memcpy(&EXT_ERR_BUF[off], base, max_len);
+        for (int i=0; i < 3; i++) {
+            EXT_ERR_BUF[254 - i] = '.';
+        }
+        off = 255;
+    } else {
+        memcpy(&EXT_ERR_BUF[off], base, base_len); // NOLINT(bugprone-not-null-terminated-result)
+        off += base_len;
+    }
+
+    EXT_ERR_BUF[off] = (char) 0;
+    return EXT_ERR_BUF;
+}
 
 const char* justin_err_str(justin_err err) {
     if (justin_err_is_system(err)) {
         const char* base = strerror((int) (err ^ JUSTIN_ERR_FLAG_SYSTEM));
-        size_t base_len = strlen(base);
-        bool overflow = (base_len > 241);
-        if (overflow) {
-            base_len = 241;
-        }
-        memcpy(&SYSTEM_ERR_BUF[14], base, base_len); // NOLINT(bugprone-not-null-terminated-result)
-        SYSTEM_ERR_BUF[14 + base_len] = (char) 0;
-        if (overflow) {
-            for (int i=1; i < 4; i++) SYSTEM_ERR_BUF[14 + base_len - i] = '.';
-        }
-        return SYSTEM_ERR_BUF;
+        return err_str_ext(base, SYSTEM_ERR, 14);
+    }
+    if (justin_err_is_curl(err)) {
+        const char* base = curl_easy_strerror((int) (err ^ JUSTIN_ERR_FLAG_CURL));
+        return err_str_ext(base, CURL_ERR, 12);
+    }
+    if (justin_err_is_subproc(err)) {
+        sprintf(EXT_ERR_BUF, "%s%ld", SUBPROC_ERR, err ^ JUSTIN_ERR_FLAG_SUBPROC);
+        return EXT_ERR_BUF;
+    }
+    if (justin_err_is_alpm(err)) {
+        const char* base = alpm_strerror((alpm_errno_t) (err ^ JUSTIN_ERR_FLAG_ALPM));
+        return err_str_ext(base, ALPM_ERR, 12);
     }
     switch (err) {
         case JUSTIN_ERR_NOMEM:
@@ -36,6 +69,14 @@ const char* justin_err_str(justin_err err) {
             return MSG_LOCKFILE_FULL;
         case JUSTIN_ERR_LINK:
             return MSG_LINK;
+        case JUSTIN_ERR_ARGS:
+            return MSG_ARGS;
+        case JUSTIN_ERR_ASSERTION:
+            return MSG_ASSERTION;
+        case JUSTIN_ERR_GIT: {
+            const char* base = git_error_last()->message;
+            return err_str_ext(base, GIT_ERR, 11);
+        }
         default:
             sprintf(&UNKNOWN_ERR_BUF[17], "%lX)", err);
             return UNKNOWN_ERR_BUF;

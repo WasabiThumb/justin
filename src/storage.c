@@ -5,6 +5,9 @@
 #include <sys/stat.h>
 #include <sys/file.h>
 #include <sys/mman.h>
+#include <time.h>
+#include <sys/random.h>
+#include <sys/types.h>
 #include <stdbool.h>
 #include <pwd.h>
 #include <errno.h>
@@ -21,20 +24,24 @@ static const char* DATA_DIR = DATA_DIR_STR;
 static const char* LOCK_FILE = LOCK_FILE_STR;
 #define LOCK_FILE_LEN ((sizeof LOCK_FILE_STR) - 1)
 
-justin_storage justin_storage_init() {
-    struct passwd *user = getpwuid(getuid());
+justin_storage justin_storage_init(uid_t uid) {
+    struct passwd *user = getpwuid(uid);
     char *home = user->pw_dir;
     size_t home_len = strlen(home);
 
     justin_storage ret = (justin_storage) justin_malloc_msg(sizeof(struct justin_storage) + home_len + DATA_DIR_LEN + 2, "Failed to allocate storage struct");
     char* dir = (char*) (ret + sizeof(struct justin_storage));
     size_t dir_len = justin_util_path_join(home, strlen(home), DATA_DIR, DATA_DIR_LEN, dir);
+    ret->user = uid;
     ret->path = dir;
 
     struct stat st = { 0 };
     if (stat(dir, &st) == -1) {
         justin_log_warn("Cache directory does not exist, creating...");
         if (mkdir(dir, 0775) == -1) {
+            justin_log_err_soft(JUSTIN_ERR_SYSTEM);
+        }
+        if (chown(dir, uid, -1) == -1) {
             justin_log_err_soft(JUSTIN_ERR_SYSTEM);
         }
     }
@@ -45,6 +52,9 @@ justin_storage justin_storage_init() {
     if (lockfile_fd == -1) {
         free(ret);
         return NULL;
+    }
+    if (fchown(lockfile_fd, uid, -1) == -1) {
+        justin_log_err_soft(JUSTIN_ERR_SYSTEM);
     }
     if (ftruncate(lockfile_fd, sizeof(struct justin_storage_lockfile)) == -1) {
         free(ret);
@@ -123,7 +133,7 @@ void justin_storage_clean(justin_storage storage) {
         justin_util_path_join(storage->path, base_len, ent->d_name, ent_name_len, path_buffer);
         err = justin_util_rimraf(path_buffer);
         if (err != 0) {
-            justin_log_err_msg(err, "Failed to clean cache");
+            justin_log_err_msg(JUSTIN_ERR_SYSTEM, "Failed to clean cache");
             break;
         }
     }
@@ -131,7 +141,7 @@ void justin_storage_clean(justin_storage storage) {
     closedir(d);
 }
 
-int justin_storage_set_locked(justin_storage storage, bool locked) {
+justin_err justin_storage_set_locked(justin_storage storage, bool locked) {
     if (flock(storage->lockfile_handle, LOCK_SH) == -1) return JUSTIN_ERR_SYSTEM;
 
     uint64_t flag = storage->lockfile->lock[storage->pid_page];
@@ -169,10 +179,50 @@ int justin_storage_set_locked(justin_storage storage, bool locked) {
     return 0;
 }
 
-int justin_storage_lock(justin_storage storage) {
+justin_err justin_storage_lock(justin_storage storage) {
     return justin_storage_set_locked(storage, true);
 }
 
-int justin_storage_unlock(justin_storage storage) {
+justin_err justin_storage_unlock(justin_storage storage) {
     return justin_storage_set_locked(storage, false);
+}
+
+const char* justin_storage_dir_create(justin_storage storage, justin_err *err) {
+    *err = JUSTIN_ERR_OK;
+
+    char id_bytes[sizeof(__time_t)];
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    memcpy(id_bytes, &ts.tv_sec, sizeof(__time_t));
+    getrandom(&id_bytes[sizeof(__time_t) >> 1], sizeof(__time_t) >> 1, 0);
+
+    char id_hex[(sizeof(__time_t) * 2) + 1];
+    char b;
+    int n = 0;
+    for (int i=0; i < sizeof(__time_t); i++) {
+        b = id_bytes[i];
+        id_hex[n++] = justin_util_n2hex((b >> 4) & 0xF);
+        id_hex[n++] = justin_util_n2hex(b & 0xF);
+    }
+    id_hex[sizeof(__time_t) * 2] = (char) 0;
+
+    size_t path_len = strlen(storage->path);
+    size_t total_len = path_len + (sizeof(__time_t) * 2) + 1;
+    char* fn = (char*) malloc(total_len);
+    if (fn == NULL) {
+        *err = JUSTIN_ERR_NOMEM;
+        return NULL;
+    }
+    justin_util_path_join(storage->path, path_len, id_hex, sizeof(__time_t) * 2, fn);
+
+    if (mkdir(fn, 0775) == -1) {
+        *err = JUSTIN_ERR_SYSTEM;
+        free(fn);
+        return NULL;
+    }
+
+    if (chown(fn, storage->user, -1) == -1) {
+        justin_log_err_soft(JUSTIN_ERR_SYSTEM);
+    }
+    return fn;
 }
